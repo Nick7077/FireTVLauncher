@@ -1,0 +1,11 @@
+<resources>
+    <dimen name="screen_gutter">40dp</dimen>
+    <dimen name="card_pad">10dp</dimen>
+    <dimen name="card_radius">12dp</dimen>
+    <dimen name="card_lift">14dp</dimen>
+    <dimen name="card_icon">40dp</dimen>
+    <dimen name="caption_drop">3dp</dimen>
+    <dimen name="favorite_card_width">236dp</dimen>
+    <dimen name="input_card_width">196dp</dimen>
+    <dimen name="options_width">380dp</dimen>
+</resources>

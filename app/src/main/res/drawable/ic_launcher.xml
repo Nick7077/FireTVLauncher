@@ -1,6 +1,16 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="48dp" android:height="48dp"
     android:viewportWidth="48" android:viewportHeight="48">
-    <path android:fillColor="#4DA3FF" android:pathData="M8,4h32a4,4 0,0 1,4 4v32a4,4 0,0 1,-4 4h-32a4,4 0,0 1,-4 -4v-32a4,4 0,0 1,4 -4z" />
-    <path android:fillColor="#0E1116" android:pathData="M12,12h10v10h-10zM26,12h10v10h-10zM12,26h10v10h-10zM26,26h10v10h-10z" />
+    <path android:pathData="M12,2h24a10,10 0,0 1,10 10v24a10,10 0,0 1,-10 10h-24a10,10 0,0 1,-10 -10v-24a10,10 0,0 1,10 -10z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="2" android:startY="2" android:endX="46" android:endY="46"
+                android:startColor="#7C5CFF" android:endColor="#18C8E8" />
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M15,13h6a2,2 0,0 1,2 2v6a2,2 0,0 1,-2 2h-6a2,2 0,0 1,-2 -2v-6a2,2 0,0 1,2 -2zM27,13h6a2,2 0,0 1,2 2v6a2,2 0,0 1,-2 2h-6a2,2 0,0 1,-2 -2v-6a2,2 0,0 1,2 -2zM15,25h6a2,2 0,0 1,2 2v6a2,2 0,0 1,-2 2h-6a2,2 0,0 1,-2 -2v-6a2,2 0,0 1,2 -2z" />
+    <path android:fillColor="#FFFFFF" android:fillAlpha="0.55"
+        android:pathData="M27,25h6a2,2 0,0 1,2 2v6a2,2 0,0 1,-2 2h-6a2,2 0,0 1,-2 -2v-6a2,2 0,0 1,2 -2z" />
 </vector>
