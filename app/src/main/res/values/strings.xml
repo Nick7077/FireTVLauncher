@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">Quick Launcher</string>
+    <string name="watcher_label">Quick Launcher home button</string>
+    <string name="watcher_description">Opens Quick Launcher instead of the Amazon home screen when you press Home.</string>
+    <string name="settings">Settings</string>
+    <string name="pin">Pin to front</string>
+    <string name="unpin">Unpin</string>
+    <string name="hide">Hide</string>
+    <string name="unhide">Unhide</string>
+    <string name="app_info">App info</string>
+    <string name="show_hidden_apps">Show hidden apps</string>
+    <string name="hide_hidden_apps">Stop showing hidden apps</string>
+    <string name="showing_hidden">Showing hidden apps. Press Back to return.</string>
+    <string name="input_failed">Could not switch to that input</string>
+    <string name="input_no_info">Close</string>
+    <string name="launch_failed">Could not open %1$s</string>
+</resources>
