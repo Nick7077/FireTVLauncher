@@ -21,12 +21,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Loads installed apps and inputs, and remembers favorites, hidden apps and launch counts. */
 final class AppRepository {
     /** Prefix for keys of input cards, which switch to an HDMI/composite input. */
     static final String INPUT_PREFIX = "input:";
-    private static final String STOCK_LAUNCHER = "com.amazon.tv.launcher";
+    static final String STOCK_LAUNCHER = "com.amazon.tv.launcher";
     /** Favorites row is topped up with most-used apps to this size. */
     private static final int MAX_FAVORITES = 10;
     /** Distinct colors so inputs are easy to tell apart at a glance. */
@@ -37,22 +38,51 @@ final class AppRepository {
         final List<AppEntry> favorites = new ArrayList<>();
         final List<AppEntry> inputs = new ArrayList<>();
         final List<AppEntry> apps = new ArrayList<>();
+        final boolean includesHidden;
+        /** Computed on the loader thread so the UI thread only compares strings. */
+        String signature;
 
-        String signature() {
-            StringBuilder sb = new StringBuilder();
+        HomeData(boolean includesHidden) {
+            this.includesHidden = includesHidden;
+        }
+
+        private String computeSignature() {
+            StringBuilder sb = new StringBuilder(256).append(includesHidden).append('/');
             for (List<AppEntry> section : Arrays.asList(favorites, inputs, apps)) {
-                for (AppEntry e : section) sb.append(e.signature()).append(';');
+                for (AppEntry e : section) {
+                    e.appendSignature(sb);
+                    sb.append(';');
+                }
                 sb.append('/');
             }
             return sb.toString();
         }
     }
 
+    /** Label and artwork of a launchable activity; loading these is the slow part of a load. */
+    private static final class Art {
+        final String className;
+        final String label;
+        final Drawable banner;
+        final Drawable icon;
+        final int accent;
+
+        Art(String className, String label, Drawable banner, Drawable icon, int accent) {
+            this.className = className;
+            this.label = label;
+            this.banner = banner;
+            this.icon = icon;
+            this.accent = accent;
+        }
+    }
+
     private final Context context;
     private final PackageManager pm;
     private final SharedPreferences prefs;
-    /** Brand colors are costly to compute and never change for an installed version. */
-    private final Map<String, Integer> accentCache = new HashMap<>();
+    /** Per package; dropped by {@link #invalidate} when the package is updated or removed. */
+    private final Map<String, Art> artCache = new ConcurrentHashMap<>();
+    /** Per input key, so inputs keep the same drawable (and signature) between loads. */
+    private final Map<String, Drawable> inputIcons = new ConcurrentHashMap<>();
 
     AppRepository(Context context) {
         this.context = context.getApplicationContext();
@@ -60,26 +90,37 @@ final class AppRepository {
         this.prefs = context.getSharedPreferences("launcher", Context.MODE_PRIVATE);
     }
 
+    /** Forgets cached artwork for a package that was installed, updated or removed. */
+    void invalidate(String pkg) {
+        artCache.remove(pkg);
+    }
+
     /** Builds the home screen contents. Safe to call off the main thread. */
     HomeData load(boolean includeHidden) {
         Set<String> hidden = getHidden();
         List<String> favOrder = getFavoriteOrder();
-        HomeData data = new HomeData();
+        Set<String> favSet = new HashSet<>(favOrder);
+        HomeData data = new HomeData(includeHidden);
 
-        for (ResolveInfo ri : queryLaunchables()) {
+        List<ResolveInfo> launchables = queryLaunchables();
+        Set<String> installed = new HashSet<>();
+        for (ResolveInfo ri : launchables) {
             String pkg = ri.activityInfo.packageName;
+            installed.add(pkg);
             if (pkg.equals(STOCK_LAUNCHER) || pkg.equals(context.getPackageName())) continue;
             AppEntry e = toEntry(ri);
             e.hidden = hidden.contains(pkg);
-            e.favorite = favOrder.contains(pkg);
+            e.favorite = favSet.contains(pkg);
             if (!e.hidden || includeHidden) data.apps.add(e);
         }
+        // Drop artwork of apps that went away without a broadcast reaching us.
+        artCache.keySet().retainAll(installed);
         Collator collator = Collator.getInstance();
         Collections.sort(data.apps, (a, b) -> collator.compare(a.label, b.label));
 
         for (AppEntry e : loadInputs()) {
             e.hidden = hidden.contains(e.key);
-            e.favorite = favOrder.contains(e.key);
+            e.favorite = favSet.contains(e.key);
             if (!e.hidden || includeHidden) data.inputs.add(e);
         }
 
@@ -91,15 +132,19 @@ final class AppRepository {
             AppEntry e = byKey.get(key);
             if (e != null && !e.hidden) data.favorites.add(e);
         }
-        List<AppEntry> used = new ArrayList<>();
+        Map<AppEntry, Integer> counts = new HashMap<>();
         for (AppEntry e : data.apps) {
-            if (!e.favorite && !e.hidden && launchCount(e.key) > 0) used.add(e);
+            if (e.favorite || e.hidden) continue;
+            int count = launchCount(e.key);
+            if (count > 0) counts.put(e, count);
         }
-        Collections.sort(used, (a, b) -> Integer.compare(launchCount(b.key), launchCount(a.key)));
+        List<AppEntry> used = new ArrayList<>(counts.keySet());
+        Collections.sort(used, (a, b) -> Integer.compare(counts.get(b), counts.get(a)));
         for (AppEntry e : used) {
             if (data.favorites.size() >= MAX_FAVORITES) break;
             data.favorites.add(e);
         }
+        data.signature = data.computeSignature();
         return data;
     }
 
@@ -110,8 +155,7 @@ final class AppRepository {
                 Intent.CATEGORY_LEANBACK_LAUNCHER, Intent.CATEGORY_LAUNCHER}) {
             Intent query = new Intent(Intent.ACTION_MAIN).addCategory(category);
             for (ResolveInfo ri : pm.queryIntentActivities(query, 0)) {
-                String pkg = ri.activityInfo.packageName;
-                if (!byPackage.containsKey(pkg)) byPackage.put(pkg, ri);
+                byPackage.putIfAbsent(ri.activityInfo.packageName, ri);
             }
         }
         return new ArrayList<>(byPackage.values());
@@ -120,22 +164,19 @@ final class AppRepository {
     private AppEntry toEntry(ResolveInfo ri) {
         ActivityInfo ai = ri.activityInfo;
         String pkg = ai.packageName;
-        Drawable banner = ai.loadBanner(pm);
-        Drawable icon = ai.loadIcon(pm);
+        Art art = artCache.get(pkg);
+        if (art == null || !art.className.equals(ai.name)) {
+            Drawable banner = ai.loadBanner(pm);
+            Drawable icon = ai.loadIcon(pm);
+            art = new Art(ai.name, String.valueOf(ai.loadLabel(pm)), banner, icon,
+                    Colors.dominant(banner != null ? banner : icon));
+            artCache.put(pkg, art);
+        }
         Intent launch = new Intent(Intent.ACTION_MAIN)
                 .setClassName(pkg, ai.name)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        return new AppEntry(AppEntry.Kind.APP, pkg, String.valueOf(ai.loadLabel(pm)), banner, icon,
-                launch, accentFor(pkg, banner != null ? banner : icon), null);
-    }
-
-    private int accentFor(String key, Drawable art) {
-        Integer cached = accentCache.get(key);
-        if (cached == null) {
-            cached = Colors.dominant(art);
-            accentCache.put(key, cached);
-        }
-        return cached;
+        return new AppEntry(AppEntry.Kind.APP, pkg, art.label, art.banner, art.icon,
+                launch, art.accent, null);
     }
 
     /** One card per connected passthrough input (HDMI, composite). */
@@ -145,25 +186,30 @@ final class AppRepository {
         if (tim == null) return inputs;
         // Order by the built-in port name (HDMI 1, HDMI 2, ...) so colors stay tied to the
         // physical port even if the user renames an input.
-        List<TvInputInfo> infos = new ArrayList<>(tim.getTvInputList());
-        Collator collator = Collator.getInstance();
-        Collections.sort(infos, (a, b) -> collator.compare(
-                String.valueOf(a.loadLabel(context)), String.valueOf(b.loadLabel(context))));
-        for (TvInputInfo info : infos) {
+        Map<TvInputInfo, String> portNames = new HashMap<>();
+        for (TvInputInfo info : tim.getTvInputList()) {
             if (!info.isPassthroughInput() || info.isHidden(context)) continue;
+            portNames.put(info, String.valueOf(info.loadLabel(context)));
+        }
+        List<TvInputInfo> infos = new ArrayList<>(portNames.keySet());
+        Collator collator = Collator.getInstance();
+        Collections.sort(infos, (a, b) -> collator.compare(portNames.get(a), portNames.get(b)));
+        for (TvInputInfo info : infos) {
             int state = tim.getInputState(info.getId());
             if (state == TvInputManager.INPUT_STATE_DISCONNECTED) continue;
             CharSequence label = info.loadCustomLabel(context);
-            if (label == null || label.length() == 0) label = info.loadLabel(context);
+            if (label == null || label.length() == 0) label = portNames.get(info);
             Intent play = new Intent(context, InputPlayerActivity.class)
                     .putExtra(InputPlayerActivity.EXTRA_INPUT_ID, info.getId())
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             String status = context.getString(state == TvInputManager.INPUT_STATE_CONNECTED
                     ? R.string.input_active : R.string.input_standby);
             int accent = INPUT_ACCENTS[inputs.size() % INPUT_ACCENTS.length];
-            inputs.add(new AppEntry(AppEntry.Kind.INPUT, INPUT_PREFIX + info.getId(),
-                    String.valueOf(label), null, context.getDrawable(R.drawable.ic_hdmi), play,
-                    accent, status));
+            String key = INPUT_PREFIX + info.getId();
+            Drawable icon = inputIcons.computeIfAbsent(key,
+                    k -> context.getDrawable(R.drawable.ic_hdmi));
+            inputs.add(new AppEntry(AppEntry.Kind.INPUT, key, String.valueOf(label), null, icon,
+                    play, accent, status));
         }
         return inputs;
     }
@@ -172,7 +218,7 @@ final class AppRepository {
      * Fire OS routes ACTION_SETTINGS through the stock home screen first, so prefer the
      * Android TV settings entry point, which opens Amazon's settings screen directly.
      */
-    Intent settingsIntent() {
+    static Intent settingsIntent(PackageManager pm) {
         Intent tvSettings = new Intent(Intent.ACTION_MAIN)
                 .addCategory("android.intent.category.LEANBACK_SETTINGS")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -206,8 +252,9 @@ final class AppRepository {
 
     boolean canMoveFavorite(String key, int delta) {
         List<String> order = getFavoriteOrder();
-        int j = order.indexOf(key) + delta;
-        return order.contains(key) && j >= 0 && j < order.size();
+        int i = order.indexOf(key);
+        int j = i + delta;
+        return i >= 0 && j >= 0 && j < order.size();
     }
 
     void toggleHidden(String key) {
@@ -216,6 +263,7 @@ final class AppRepository {
         prefs.edit().putStringSet("hidden", hidden).apply();
     }
 
+    /** Owned by SharedPreferences: copy before modifying. */
     private Set<String> getHidden() {
         return prefs.getStringSet("hidden", Collections.emptySet());
     }

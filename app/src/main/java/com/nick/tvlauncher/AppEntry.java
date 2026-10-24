@@ -33,8 +33,19 @@ final class AppEntry {
         this.subtitle = subtitle;
     }
 
-    /** Identity used to skip redundant redraws when nothing changed. */
-    String signature() {
-        return key + '|' + label + '|' + favorite + '|' + hidden + '|' + subtitle;
+    /** Non-negative, so it never collides with the adapters' fixed negative ids. */
+    long stableId() {
+        return key.hashCode() & 0xFFFFFFFFL;
+    }
+
+    /**
+     * Identity used to skip redundant redraws when nothing changed. Artwork is cached per
+     * package and replaced when the app updates, so its identity tracks new banners too.
+     */
+    void appendSignature(StringBuilder sb) {
+        sb.append(key).append('|').append(label).append('|').append(favorite).append('|')
+                .append(hidden).append('|').append(subtitle).append('|')
+                .append(System.identityHashCode(banner)).append('|')
+                .append(System.identityHashCode(icon));
     }
 }

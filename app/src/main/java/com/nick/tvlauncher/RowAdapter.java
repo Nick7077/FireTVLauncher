@@ -1,7 +1,5 @@
 package com.nick.tvlauncher;
 
-import android.view.LayoutInflater;
-import android.view.View;
 import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
@@ -11,15 +9,19 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Cards in one horizontal row (Favorites, Inputs). */
-final class RowAdapter extends RecyclerView.Adapter<RowAdapter.Holder> {
-    private final CardBinder.Listener listener;
+final class RowAdapter extends RecyclerView.Adapter<CardHolder> {
+    private final CardHolder.Listener listener;
     private final int cardWidthPx;
     private List<AppEntry> items = new ArrayList<>();
 
-    RowAdapter(CardBinder.Listener listener, int cardWidthPx) {
+    RowAdapter(CardHolder.Listener listener, int cardWidthPx) {
         this.listener = listener;
         this.cardWidthPx = cardWidthPx;
         setHasStableIds(true);
+    }
+
+    int cardWidthPx() {
+        return cardWidthPx;
     }
 
     void setItems(List<AppEntry> items) {
@@ -29,7 +31,7 @@ final class RowAdapter extends RecyclerView.Adapter<RowAdapter.Holder> {
 
     @Override
     public long getItemId(int position) {
-        return items.get(position).key.hashCode();
+        return items.get(position).stableId();
     }
 
     @Override
@@ -39,20 +41,14 @@ final class RowAdapter extends RecyclerView.Adapter<RowAdapter.Holder> {
 
     @NonNull
     @Override
-    public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_card, parent, false);
-        v.getLayoutParams().width = cardWidthPx;
-        return new Holder(v);
+    public CardHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        CardHolder holder = CardHolder.create(parent, listener);
+        holder.itemView.getLayoutParams().width = cardWidthPx;
+        return holder;
     }
 
     @Override
-    public void onBindViewHolder(@NonNull Holder holder, int position) {
-        CardBinder.bind(holder.itemView, items.get(position), listener);
-    }
-
-    static final class Holder extends RecyclerView.ViewHolder {
-        Holder(View v) {
-            super(v);
-        }
+    public void onBindViewHolder(@NonNull CardHolder holder, int position) {
+        holder.bind(items.get(position));
     }
 }

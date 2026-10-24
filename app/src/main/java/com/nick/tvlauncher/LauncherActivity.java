@@ -8,17 +8,21 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Outline;
+import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
+import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.view.View;
 import android.widget.Toast;
 
 import androidx.recyclerview.widget.GridLayoutManager;
@@ -28,18 +32,26 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class LauncherActivity extends Activity implements HomeAdapter.Listener {
     private static final int GRID_COLUMNS = 5;
     private static final int BASE_BG = 0xFF07090D;
 
+    private static final DecelerateInterpolator PANEL_EASE = new DecelerateInterpolator(2f);
+
     private final ExecutorService loader = Executors.newSingleThreadExecutor();
+    /** Bumped per reload so a burst of requests (e.g. package broadcasts) runs one load. */
+    private final AtomicInteger reloadGeneration = new AtomicInteger();
+    private final ArgbEvaluator argb = new ArgbEvaluator();
     private AppRepository repo;
     private HomeAdapter adapter;
     private RecyclerView list;
     private GradientDrawable ambient;
     private ValueAnimator ambientAnim;
+    /** Accent the background is heading toward, and the tone currently drawn. */
     private int ambientColor = Colors.NEUTRAL;
+    private int ambientShown = ambientTone(Colors.NEUTRAL);
     private boolean showHidden;
     private String lastSignature;
     private View optionsScrim;
@@ -50,6 +62,8 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
     private final BroadcastReceiver packageReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
+            Uri data = intent.getData();
+            if (data != null) repo.invalidate(data.getSchemeSpecificPart());
             reload();
         }
     };
@@ -62,8 +76,10 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
 
         // Background glow that drifts toward the focused app's brand color.
         ambient = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{ambientTone(ambientColor), BASE_BG, BASE_BG});
+                new int[]{ambientShown, BASE_BG, BASE_BG});
         findViewById(R.id.root).setBackground(ambient);
+        // The root paints the whole screen, so the window background would only be overdraw.
+        getWindow().setBackgroundDrawable(null);
 
         adapter = new HomeAdapter(this, this);
         list = findViewById(R.id.list);
@@ -71,7 +87,7 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
             /** Keeps the focused row centered vertically instead of hugging the screen edge. */
             @Override
             public boolean requestChildRectangleOnScreen(RecyclerView parent, View child,
-                    android.graphics.Rect rect, boolean immediate, boolean focusedChildVisible) {
+                    Rect rect, boolean immediate, boolean focusedChildVisible) {
                 int childCenter = child.getTop() + rect.top + rect.height() / 2;
                 int dy = childCenter - parent.getHeight() / 2;
                 if (dy == 0) return false;
@@ -93,6 +109,15 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
         optionsScrim = findViewById(R.id.options_scrim);
         optionsPanel = findViewById(R.id.options_panel);
         optionsScrim.setOnClickListener(v -> closeOptions());
+        ImageView optionsIcon = findViewById(R.id.options_icon);
+        optionsIcon.setClipToOutline(true);
+        optionsIcon.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(),
+                        view.getWidth() * 0.22f);
+            }
+        });
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -112,6 +137,7 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
     @Override
     protected void onDestroy() {
         unregisterReceiver(packageReceiver);
+        if (ambientAnim != null) ambientAnim.cancel();
         loader.shutdownNow();
         super.onDestroy();
     }
@@ -158,7 +184,10 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
 
     private void reload() {
         boolean hidden = showHidden;
+        int generation = reloadGeneration.incrementAndGet();
         loader.execute(() -> {
+            // A newer reload is queued behind this one; let it do the work.
+            if (generation != reloadGeneration.get()) return;
             AppRepository.HomeData data = repo.load(hidden);
             runOnUiThread(() -> apply(data, hidden));
         });
@@ -166,7 +195,7 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
 
     private void apply(AppRepository.HomeData data, boolean hidden) {
         if (isDestroyed() || hidden != showHidden) return;
-        String signature = data.signature() + hidden;
+        String signature = data.signature;
         // Unchanged contents: keep the current views so focus stays where the user left it.
         if (signature.equals(lastSignature)) return;
         boolean firstLoad = lastSignature == null;
@@ -193,12 +222,18 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
 
     @Override
     public void onLaunch(AppEntry entry) {
+        if (tryStart(entry.launchIntent, entry.label)) repo.recordLaunch(entry.key);
+    }
+
+    /** Starts an activity, showing a toast instead of crashing if it is gone or refused. */
+    private boolean tryStart(Intent intent, CharSequence label) {
         try {
-            startActivity(entry.launchIntent);
-            repo.recordLaunch(entry.key);
+            startActivity(intent);
+            return true;
         } catch (ActivityNotFoundException | SecurityException e) {
-            Toast.makeText(this, getString(R.string.launch_failed, entry.label),
+            Toast.makeText(this, getString(R.string.launch_failed, label),
                     Toast.LENGTH_SHORT).show();
+            return false;
         }
     }
 
@@ -209,7 +244,7 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
 
     @Override
     public void onSettings() {
-        startActivity(repo.settingsIntent());
+        tryStart(AppRepository.settingsIntent(getPackageManager()), getString(R.string.settings));
     }
 
     @Override
@@ -230,8 +265,8 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
         actions.add(() -> repo.toggleHidden(entry.key));
         if (entry.kind == AppEntry.Kind.APP) {
             labels.add(getString(R.string.app_info));
-            actions.add(() -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.fromParts("package", entry.key, null))));
+            actions.add(() -> tryStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", entry.key, null)), getString(R.string.app_info)));
         }
         labels.add(getString(showHidden ? R.string.hide_hidden_apps : R.string.show_hidden_apps));
         actions.add(() -> showHidden = !showHidden);
@@ -245,16 +280,7 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
 
     private void showOptions(AppEntry entry, List<String> labels, List<Runnable> actions) {
         focusBeforeOptions = getCurrentFocus();
-        ImageView icon = findViewById(R.id.options_icon);
-        icon.setImageDrawable(entry.icon);
-        icon.setClipToOutline(true);
-        icon.setOutlineProvider(new android.view.ViewOutlineProvider() {
-            @Override
-            public void getOutline(View view, android.graphics.Outline outline) {
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(),
-                        view.getWidth() * 0.22f);
-            }
-        });
+        ((ImageView) findViewById(R.id.options_icon)).setImageDrawable(entry.icon);
         ((TextView) findViewById(R.id.options_title)).setText(entry.label);
         ((TextView) findViewById(R.id.options_subtitle)).setText(
                 entry.kind == AppEntry.Kind.INPUT ? R.string.options_kind_input : R.string.options_kind_app);
@@ -281,7 +307,7 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
         optionsScrim.animate().alpha(1f).setDuration(180).start();
         optionsPanel.setTranslationX(getResources().getDimension(R.dimen.options_width));
         optionsPanel.animate().translationX(0).setDuration(220)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+                .setInterpolator(PANEL_EASE).start();
         container.getChildAt(0).requestFocus();
     }
 
@@ -300,15 +326,17 @@ public class LauncherActivity extends Activity implements HomeAdapter.Listener {
     }
 
     private void animateAmbient(int accent) {
+        if (accent == ambientColor) return;
         if (ambientAnim != null) ambientAnim.cancel();
-        int from = ambientColor;
         ambientColor = accent;
-        ArgbEvaluator argb = new ArgbEvaluator();
-        int start = ambientTone(from);
+        // Start from what is on screen so fast D-pad moves blend instead of jumping.
+        int start = ambientShown;
         int end = ambientTone(accent);
         ambientAnim = ValueAnimator.ofFloat(0f, 1f).setDuration(450);
-        ambientAnim.addUpdateListener(a -> ambient.setColors(new int[]{
-                (int) argb.evaluate(a.getAnimatedFraction(), start, end), BASE_BG, BASE_BG}));
+        ambientAnim.addUpdateListener(a -> {
+            ambientShown = (int) argb.evaluate(a.getAnimatedFraction(), start, end);
+            ambient.setColors(new int[]{ambientShown, BASE_BG, BASE_BG});
+        });
         ambientAnim.start();
     }
 

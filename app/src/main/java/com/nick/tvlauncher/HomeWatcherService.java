@@ -4,7 +4,6 @@ import android.accessibilityservice.AccessibilityService;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.os.SystemClock;
-import android.provider.Settings;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityEvent;
@@ -22,7 +21,6 @@ import android.view.accessibility.AccessibilityEvent;
  */
 public class HomeWatcherService extends AccessibilityService {
     private static final String TAG = "HomeWatcher";
-    private static final String STOCK_LAUNCHER = "com.amazon.tv.launcher";
     // The stock launcher package also hosts Settings, so only its home screen is redirected.
     private static final String STOCK_HOME_PREFIX = "com.amazon.tv.launcher.ui.HomeActivity";
     private static final long DEBOUNCE_MS = 500;
@@ -33,7 +31,7 @@ public class HomeWatcherService extends AccessibilityService {
 
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
-        Log.i(TAG, "Key: " + event);
+        // Every key on the remote passes through here; never log them.
         if (event.getKeyCode() != KeyEvent.KEYCODE_HOME) return false;
 
         long heldMs = event.getEventTime() - event.getDownTime();
@@ -60,9 +58,8 @@ public class HomeWatcherService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
         CharSequence pkg = event.getPackageName();
-        if (pkg == null || !STOCK_LAUNCHER.contentEquals(pkg)) return;
+        if (pkg == null || !AppRepository.STOCK_LAUNCHER.contentEquals(pkg)) return;
         CharSequence cls = event.getClassName();
-        Log.i(TAG, "Stock launcher window: " + cls);
         if (cls == null || !cls.toString().startsWith(STOCK_HOME_PREFIX)) return;
         showLauncher();
     }
@@ -72,21 +69,22 @@ public class HomeWatcherService extends AccessibilityService {
         if (now - lastRedirect < DEBOUNCE_MS) return;
         lastRedirect = now;
 
-        startActivity(new Intent(this, LauncherActivity.class)
+        safeStart(new Intent(this, LauncherActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_CLEAR_TOP
                         | Intent.FLAG_ACTIVITY_NO_ANIMATION));
     }
 
     private void openSettings() {
-        Intent tvSettings = new Intent(Intent.ACTION_MAIN)
-                .addCategory("android.intent.category.LEANBACK_SETTINGS")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        safeStart(AppRepository.settingsIntent(getPackageManager()));
+    }
+
+    /** A crash here would unbind the service and leave Home going to Amazon's screen. */
+    private void safeStart(Intent intent) {
         try {
-            startActivity(tvSettings);
-        } catch (ActivityNotFoundException e) {
-            startActivity(new Intent(Settings.ACTION_SETTINGS)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            startActivity(intent);
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Log.w(TAG, "Could not start " + intent.getComponent(), e);
         }
     }
 

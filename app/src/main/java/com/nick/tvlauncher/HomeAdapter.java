@@ -24,7 +24,7 @@ final class HomeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static final int TYPE_ROW = 2;
     static final int TYPE_CARD = 3;
 
-    interface Listener extends CardBinder.Listener {
+    interface Listener extends CardHolder.Listener {
         void onSettings();
     }
 
@@ -72,7 +72,7 @@ final class HomeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         items.add(new Item(TYPE_TITLE, context.getString(showingHidden
                 ? R.string.section_all_apps_with_hidden : R.string.section_all_apps), null, null, 0, -6));
         for (AppEntry e : data.apps) {
-            items.add(new Item(TYPE_CARD, null, null, e, 0, e.key.hashCode()));
+            items.add(new Item(TYPE_CARD, null, null, e, 0, e.stableId()));
         }
         notifyDataSetChanged();
     }
@@ -106,8 +106,11 @@ final class HomeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         LayoutInflater inflater = LayoutInflater.from(parent.getContext());
         switch (viewType) {
-            case TYPE_HEADER:
-                return new Holder(inflater.inflate(R.layout.item_header, parent, false));
+            case TYPE_HEADER: {
+                View header = inflater.inflate(R.layout.item_header, parent, false);
+                header.findViewById(R.id.settings_button).setOnClickListener(b -> listener.onSettings());
+                return new Holder(header);
+            }
             case TYPE_TITLE:
                 return new Holder(inflater.inflate(R.layout.item_section_title, parent, false));
             case TYPE_ROW: {
@@ -118,7 +121,7 @@ final class HomeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return new Holder(row);
             }
             default:
-                return new Holder(inflater.inflate(R.layout.item_card, parent, false));
+                return CardHolder.create(parent, listener);
         }
     }
 
@@ -129,7 +132,6 @@ final class HomeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         switch (item.type) {
             case TYPE_HEADER:
                 ((TextView) v.findViewById(R.id.greeting)).setText(greeting());
-                v.findViewById(R.id.settings_button).setOnClickListener(b -> listener.onSettings());
                 break;
             case TYPE_TITLE:
                 ((TextView) v).setText(item.title);
@@ -137,16 +139,15 @@ final class HomeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             case TYPE_ROW: {
                 RecyclerView row = (RecyclerView) v;
                 RowAdapter adapter = (RowAdapter) row.getAdapter();
-                if (adapter == null || row.getTag() == null || (int) row.getTag() != item.rowCardWidth) {
+                if (adapter == null || adapter.cardWidthPx() != item.rowCardWidth) {
                     adapter = new RowAdapter(listener, item.rowCardWidth);
                     row.setAdapter(adapter);
-                    row.setTag(item.rowCardWidth);
                 }
                 adapter.setItems(item.row);
                 break;
             }
             default:
-                CardBinder.bind(v, item.card, listener);
+                ((CardHolder) holder).bind(item.card);
         }
     }
 

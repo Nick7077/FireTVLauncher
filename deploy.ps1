@@ -17,8 +17,12 @@ if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 if ($LASTEXITCODE -ne 0) { throw "Install failed (is the TV on and authorized? try: adb devices)" }
 
 # Reinstalling unbinds the accessibility service; toggling the setting rebinds it.
-& $adb -s $Tv shell settings put secure enabled_accessibility_services null
-& $adb -s $Tv shell settings put secure enabled_accessibility_services $service
+# Other enabled services are kept so deploying never turns off the user's own.
+$current = "$(& $adb -s $Tv shell settings get secure enabled_accessibility_services)".Trim()
+$others = @($current -split ':' | Where-Object { $_ -and $_ -ne 'null' -and $_ -ne $service })
+$without = if ($others.Count) { $others -join ':' } else { 'null' }
+& $adb -s $Tv shell settings put secure enabled_accessibility_services $without
+& $adb -s $Tv shell settings put secure enabled_accessibility_services (@($others) + $service -join ':')
 & $adb -s $Tv shell settings put secure accessibility_enabled 1
 & $adb -s $Tv shell am start -n com.nick.tvlauncher/.LauncherActivity | Out-Null
 Write-Host "Deployed to $Tv"

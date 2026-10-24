@@ -30,22 +30,21 @@ final class Colors {
         float[][] rgb = new float[BUCKETS][3];
         float[] hsv = new float[3];
         float total = 0;
-        for (int y = 0; y < SAMPLE; y++) {
-            for (int x = 0; x < SAMPLE; x++) {
-                int c = bmp.getPixel(x, y);
-                if (Color.alpha(c) < 200) continue;
-                Color.colorToHSV(c, hsv);
-                float w = hsv[1] * hsv[2];
-                if (w < 0.12f) continue; // white, black and grey pixels say nothing about brand
-                int b = Math.min(BUCKETS - 1, (int) (hsv[0] / 360f * BUCKETS));
-                weight[b] += w;
-                rgb[b][0] += Color.red(c) * w;
-                rgb[b][1] += Color.green(c) * w;
-                rgb[b][2] += Color.blue(c) * w;
-                total += w;
-            }
-        }
+        int[] pixels = new int[SAMPLE * SAMPLE];
+        bmp.getPixels(pixels, 0, SAMPLE, 0, 0, SAMPLE, SAMPLE);
         bmp.recycle();
+        for (int c : pixels) {
+            if (Color.alpha(c) < 200) continue;
+            Color.colorToHSV(c, hsv);
+            float w = hsv[1] * hsv[2];
+            if (w < 0.12f) continue; // white, black and grey pixels say nothing about brand
+            int b = Math.min(BUCKETS - 1, (int) (hsv[0] / 360f * BUCKETS));
+            weight[b] += w;
+            rgb[b][0] += Color.red(c) * w;
+            rgb[b][1] += Color.green(c) * w;
+            rgb[b][2] += Color.blue(c) * w;
+            total += w;
+        }
         if (total < 4f) return NEUTRAL;
 
         int best = 0;
